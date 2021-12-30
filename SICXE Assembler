@@ -1,0 +1,617 @@
+#! /usr/bin/python
+
+# -*- python -*-
+
+import sys
+import re
+import math
+
+DIRECTIVES = {
+  "START":0, 
+  "END":0, 
+  "BYTE":1, 
+  "WORD":3, 
+  "RESB":1, 
+  "RESW":3, 
+  "BASE":0, 
+  "NOBASE":0
+}
+
+MNEUMONICS = {
+  "ADDR":2,
+  "ADDF":3,
+  "ADD":3,
+  "AND":3,
+  "CLEAR":2,
+  "COMPR":2,
+  "COMPF":3,
+  "COMP":3,
+  "DIVF":3,
+  "DIVR":2,
+  "DIV":3,
+  "FIX":1,
+  "FLOAT":1,
+  "HIO":1,
+  "JEQ":3,
+  "JGT":3,
+  "JLT":3,
+  "JSUB":3,
+  "J":3,
+  "LDA":3,
+  "LDB":3,
+  "LDCH":3,
+  "LDF":3,
+  "LDL":3,
+  "LDS":3,
+  "LDT":3,
+  "LDX":3,
+  "LPS":3,
+  "MULF":3,
+  "MULR":2,
+  "MUL":3,
+  "NORM":1,
+  "OR":3,
+  "RD":3,
+  "RMO":2,
+  "RSUB":3,
+  "SHIFTL":2,
+  "SHIFTR":2,
+  "SIO":1,
+  "SSK":3,
+  "STA":3,
+  "STB":3,
+  "STCH":3,
+  "STF":3,
+  "STI":3,
+  "STL":3,
+  "STSW":3,
+  "STS":3,
+  "STT":3,
+  "STX":3,
+  "SUBF":3,
+  "SUBR":2,
+  "SUB":3,
+  "SVC":2,
+  "TD":3,
+  "TIO":1,
+  "TIXR":2,
+  "TIX":3,
+  "WD":3
+}
+
+
+
+  
+
+MNEUMONIC_HEX = {
+  "ADD":0x18,
+  "AND":0x40,
+  "COMP":0x28,
+  "DIV":0x24,	
+  "JEQ":0x30,
+  "JGT":0x34,
+  "JLT":0x38,	
+  "JSUB":0x48,
+  "J":0x3C,
+  "LDA":0x00,
+  "LDCH":0x50,
+  "LDL":0x08,
+  "LDX":0x04,
+  "OR":0x44,
+  "RD":0xD8,
+  "RSUB":0x4C,
+  "STA":0x0C,
+  "STCH":0x54,
+  "STL":0x14,
+  "STSW":0xE8,
+  "STX":0x10,
+  "SUB":0x1C,
+  "TD":0xE0,
+  "TIX":0x2C,
+  "WD":0xDC,
+  "ADDR":0x90,
+  "CLEAR":0xB4,
+  "COMPR":0xA0,
+  "DIVR":0x9C,
+  "LDB":0x68,
+  "LDS":0x6C,
+  "LDT":0x74,
+  "MULR":0x98,
+  "MUL":0x20,
+  "RMO":0xAC,
+  "SHIFTL":0xA4,
+  "SHIFTR":0xA8,
+  "STB":0x78,
+  "STS":0x7C,
+  "STT":0x84,
+  "SUBR":0x94,
+  "TIXR":0xB8,
+}
+
+
+ADDRESS = 0x000000
+PROGRAM_LENGTH = 0x0
+STARTING_ADDRESS = 0x0
+ADDRESS_LIST = []
+
+SYMBOL_TABLE = {}
+
+def start():
+  if (len(sys.argv) < 2):
+    raise SystemExit("Usage: asm <filename>")
+  
+  filename = sys.argv[1]
+  try:
+    inFd = open(filename, "r")
+  except IOError:
+    raise SystemExit("Error opening input file: " + filename)
+
+  pass1(inFd)
+  pass2(inFd)
+
+
+def tabToSpace(line):
+  index = 0
+
+  for char in line:
+    if char == "\t":
+      while (index % 8 != 0):
+        line = line[:index-1] + line[index:]
+        index -= 1
+      for i in range(8):
+        line = line[:index] + " " + line[index:]
+    index += 1
+
+def print_alphebatized(dict):
+    print("Symbols:")
+    for i in sorted(dict.keys()):
+        print(" ", i.upper(), dict[i].upper()[2:].zfill(6))
+    return
+
+
+def pass1(inFd):
+  global ADDRESS
+  global SYMBOL_TABLE
+  global PROGRAM_LENGTH
+  global STARTING_ADDRESS
+  global ADDRESS_LIST
+  line_num = 0
+
+  line = inFd.readline()
+  while line != "":
+    line_num += 1
+    tabToSpace(line)
+    line = line[:39]
+    label, directive, mneumonic, instruction, invalid_instruction = parseInstruction(line)
+
+    if label:
+      if label.group().upper() in SYMBOL_TABLE:
+        print("{}:Previously defined symbol: {}".format(line_num, label.group()))
+        print("{}  {}    {}".format(label.group(), directive.group(), instruction.group()))
+        sys.exit(1)
+      else:
+        SYMBOL_TABLE[label.group()[:-1].upper()] = str(hex(ADDRESS))
+
+    ADDRESS_LIST.append(ADDRESS)
+
+    if directive:
+      if directive.group().upper() == "START":
+        if len(instruction.group()) > 5:
+          print("{}:Extraneous characters at end of line ('{}'):",format(line_num, instruction[6:])) 
+          print("        {}    {}".format(directive.group(),instruction.group()))
+          sys.exit(1)
+        ADDRESS = int(instruction.group(), 16)
+        STARTING_ADDRESS = int(instruction.group(), 16)
+
+      elif directive.group().upper() == 'BYTE' or directive.group().upper() == 'WORD' or directive.group().upper() == 'RESB' or directive.group().upper() == 'RESW':
+        if directive.group().upper() == 'BYTE':
+          ADDRESS +=  DIRECTIVES["BYTE"]
+          if 'C' in instruction.group().upper() or 'Z' in instruction.group().upper():
+            string_length = len(instruction.group()) - 3
+            if instruction.group().upper() == 'C':
+              ADDRESS += string_length
+            else:
+              ADDRESS += math.ceil(string_length / 2)
+        elif directive.group().upper() == 'WORD':
+          ADDRESS +=  DIRECTIVES["WORD"]
+          # len(instruction.group()) *
+        elif directive.group().upper() == 'RESB':
+          ADDRESS += int(instruction.group()) * DIRECTIVES["RESB"]
+        elif directive.group().upper() == 'RESW':
+          ADDRESS += int(instruction.group()) * DIRECTIVES["RESW"]
+        # else:
+          #invalid operation code
+
+      else:
+        # if "'" in instruction.group():
+        #   quote_index = instruction.group().find()
+
+        for key in DIRECTIVES:
+          if directive.group() == key:
+            ADDRESS += DIRECTIVES[key]
+    
+    if mneumonic:
+      operation = mneumonic.group().upper()
+      if "+" in operation:
+        if operation[1:] in MNEUMONICS:
+          operation = operation[1:]
+          ADDRESS += MNEUMONICS[operation] + 1
+      elif operation in MNEUMONICS:
+        ADDRESS += MNEUMONICS[mneumonic.group().upper()]
+      # else:
+        # set error flag
+
+    if invalid_instruction:
+      print("{}:Expected instruction at mneumonic at '{}".format(line_num, invalid_instruction.group()))
+      print("{} {}".format(invalid_instruction.group(), instruction.group()))
+
+    line = inFd.readline()
+  
+  PROGRAM_LENGTH = ADDRESS - STARTING_ADDRESS
+
+def pass2(inFd):
+  global ADDRESS
+  global SYMBOL_TABLE
+  global PROGRAM_LENGTH
+  global MNEUMONIC_HEX
+  global ADDRESS_LIST
+  line_num = 0
+  flag_bits = [0,0,0,0,0,0]
+  based = False
+  index_value = 0
+  base_value = 0
+  register_values = {
+    'A':0,
+    'X':1,
+    "L":2,
+    "B":3,
+    "S":4,
+    "T":5,
+    "F":6,
+    "PC":8,
+    "SW":9
+  }
+  object_code_list = {}
+
+  inFd.seek(0)
+  ADDRESS = STARTING_ADDRESS
+  line = inFd.readline()
+  label, directive, mneumonic, instruction, invalid_instruction = parseInstruction(line)
+  
+  print("H{}{:06x}{:06x}".format(label.group()[:-1].ljust(6), STARTING_ADDRESS, PROGRAM_LENGTH))
+
+  line = inFd.readline()
+  while line != "":
+    line_num += 1
+    tabToSpace(line)
+    line = line[:39]
+    label, directive, mneumonic, instruction, invalid_instruction = parseInstruction(line)
+    if "." in line:
+      line = inFd.readline()
+      continue
+    # to handle the not working #, fix later
+
+    flag_bits =  [1, 1, 0 , 0, 0, 0]
+    flag_bits[0] = 1
+    flag_bits[1] = 1
+    if based:
+      flag_bits[3] = 1
+
+    if mneumonic:
+      mneumonic_word = mneumonic.group().upper()
+      if "+" in mneumonic_word:
+        mneumonic_word = mneumonic_word[1:]
+        flag_bits[5] = 1
+        
+
+      # print(mneumonic_word)
+
+    if instruction:
+      instruction_word = instruction.group().upper()
+      if "#" in instruction_word:
+        instruction_word = instruction_word[1:]
+        flag_bits[1] = 1
+        flag_bits[0] = 0
+      elif "@" in instruction_word:
+        instruction_word = instruction_word[1:]
+        flag_bits[0] = 1
+        flag_bits[1] = 0
+      elif "," in instruction_word:
+        flag_bits[2] = 1
+        first_part = instruction_word[:instruction_word.find(',')].strip()
+        second_part = instruction_word[instruction_word.find(',') + 1:].strip()
+        # print(first_part, second_part)
+        instruction_word = first_part
+
+
+    if directive:
+      directive_word = directive.group().upper()
+      # print(directive_word)
+      if directive_word == "BASE":
+        based = True
+        flag_bits[3] = 1
+        line = inFd.readline()
+        base_value = int(SYMBOL_TABLE[instruction_word], 16)
+        continue
+      elif directive_word == "RESB" or directive_word == "RESW":
+        line = inFd.readline()
+        continue
+      elif directive_word == "END":
+        break
+      elif directive_word == "NOBASE":
+        flag_bits[3] = 0
+        based = False
+
+    # print(int(SYMBOL_TABLE[instruction_word], 16))
+
+    # print(flag_bits)
+    # print(instruction)
+
+    if mneumonic:        
+      if MNEUMONICS[mneumonic_word] == 1:
+        object_code = "{:02x}".format(mneumonic_word + 2)
+        object_code_list[ADDRESS_LIST[line_num]] = object_code
+        # print(object_code)
+        line = inFd.readline()
+        continue
+        
+      elif MNEUMONICS[mneumonic_word] == 2:
+        if flag_bits[2] == 1:
+          register1value = register_values[first_part]
+          register2value = register_values[second_part]
+          # print(register1value, register2value)
+        else:
+          register1value = register_values[instruction_word]
+          register2value = 0
+        # print(MNEUMONIC_HEX[mneumonic_word])
+        object_code = "{:02x}{}{}".format(MNEUMONIC_HEX[mneumonic_word], register1value, register2value)
+        object_code_list[ADDRESS_LIST[line_num]] = object_code
+        # print(object_code)
+        line = inFd.readline()
+        continue
+      
+      elif instruction_word == "":
+        object_code = "{:<06x}".format(MNEUMONIC_HEX[mneumonic_word] + 3)
+        object_code_list[ADDRESS_LIST[line_num]] = object_code
+        # print(object_code)
+        line = inFd.readline()
+        continue
+
+
+  
+    
+    # check extended
+    if flag_bits[5] == 1:
+      # Checking for immediate mode/ if instruction is a address or constant
+      if flag_bits[1] == 1 and flag_bits[0] == 0:
+        # check if instruction is label
+        if instruction_word in SYMBOL_TABLE:
+          displacement = int(SYMBOL_TABLE[instruction_word], 16) - base_value
+        # otherwise its a constant
+        else:
+          displacement = int(instruction_word)
+          # print("CONSTANT DETECTED")
+      else:
+        displacement = int(SYMBOL_TABLE[instruction_word], 16)
+        flag_bits[3] = 0
+        flag_bits[4] = 0
+    # if based is true
+    elif flag_bits[3] == 1:
+      # Checking for immediate mode/ if instruction is a address or constant
+      if flag_bits[1] == 1 and flag_bits[0] == 0:
+        # check if instruction is label
+        if instruction_word in SYMBOL_TABLE:
+          displacement = int(SYMBOL_TABLE[instruction_word], 16) - base_value
+        # otherwise its a constant
+        else:
+          displacement = int(instruction_word)
+          # print("CONSTANT DETECTED")
+      else:
+        # simple based addressing
+        if "'" not in instruction_word: 
+          displacement = int(SYMBOL_TABLE[instruction_word], 16) - base_value
+          # IF displacement is too large for based or below zero, pc-relative
+          if displacement < 0 or  displacement > 4095:
+            # print('TOO BIG FOR BASED, PC-RELATIVE')
+            flag_bits[3] = 0
+            flag_bits[4] = 1
+            displacement = int(SYMBOL_TABLE[instruction_word], 16) - ADDRESS_LIST[line_num + 1]
+            # if displacement is too large for pc relative or too negative, direct
+            if displacement < -2048 or  displacement > 2047:
+              # print('TOO BIG FOR PC, DIRECT')
+              displacement = int(SYMBOL_TABLE[instruction_word], 16)
+              flag_bits[4] = 0
+              # if too big for direct, SIC
+              if displacement > 4095:
+                # print("TOO BIG FOR DIRECT, SIC")
+                flag_bits[0] = 0
+                flag_bits[1] = 0
+                displacement = int(SYMBOL_TABLE[instruction_word], 16)
+    # if based is false, starts with pc addressing
+    else:
+      flag_bits[3] = 0
+      flag_bits[4] = 1
+      displacement = int(SYMBOL_TABLE[instruction_word], 16) - ADDRESS_LIST[line_num + 1]
+      if displacement < -2048 or  displacement > 2047:
+        displacement = int(SYMBOL_TABLE[instruction_word], 16)
+        flag_bits[4] = 0
+        if displacement > 4095:
+          flag_bits[0] = 0
+          flag_bits[1] = 0
+          displacement = int(SYMBOL_TABLE[instruction_word], 16)
+
+    # print(displacement)
+    # print(flag_bits)
+      
+    flag_byte_value = flag_bits[2] * 8 + flag_bits[3] * 4 + flag_bits[4] * 2 + flag_bits[5]
+    
+    # EXTENDED
+    if flag_bits[5] == 1:
+      # print('Extended')
+      # SIMPLE
+      if flag_bits[0] == 1 and flag_bits[1] == 1:
+        # INDEX
+        if flag_bits[2] == 1:
+          object_code = "{:02x}{:01}{:05x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, SYMBOL_TABLE[instruction_word] + index_value)
+        else:
+          object_code = "{:02x}{:01}{:05x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement)
+      # INDIRECT
+      elif flag_bits[0] == 1 and flag_bits[1] == 0:
+        object_code = "{:02x}{:01}{:05x}".format(MNEUMONIC_HEX[mneumonic_word] + 2, flag_byte_value, displacement)
+      # IMMEDIATE
+      else:
+        object_code = "{:02x}{:01}{:05x}".format(MNEUMONIC_HEX[mneumonic_word] + 1, flag_byte_value, displacement)
+    
+    # BASED
+    elif flag_bits[3] == 1:
+      # print("based")
+      if flag_bits[0] == 1 and flag_bits[1] == 1:
+        if flag_bits[2] == 1:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement + index_value)
+        else:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement)
+      elif flag_bits[0] == 1 and flag_bits[1] != 1:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 2, flag_byte_value, displacement)
+      else:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 1, flag_byte_value, displacement)
+        
+    # PC-RELATIVE
+    elif flag_bits[4] == 1:
+      # print('pc')
+      # converting negative num to twos complement
+      if displacement < 0:
+        temp_displacement = ""
+        displacement = ("{0:012b}".format(-displacement))
+        for i in displacement:
+          if i == "0":
+            temp_displacement += "1"
+          else:
+            temp_displacement += "0"
+        displacement = int(temp_displacement, 2) + 1 
+
+      if flag_bits[0] == 1 and flag_bits[1] == 1:
+        if flag_bits[2] == 1:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement + index_value)
+        else:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement)
+      elif flag_bits[0] == 1 and flag_bits[1] != 1:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 2, flag_byte_value, displacement)
+      else:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 1, flag_byte_value, displacement)
+    
+    # DIRECT (EXCLUDING EXTENDED)
+    elif (flag_bits[3] == 0 and flag_bits[4] == 0) and (not flag_bits[0] == 0 and not flag_bits[1] == 0):
+      # print('direct')
+      if flag_bits[0] == 1 and flag_bits[1] == 1:
+        if flag_bits[2] == 1:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement + index_value)
+        else:
+          object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 3, flag_byte_value, displacement)
+      elif flag_bits[0] == 1 and flag_bits[1] != 1:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 2, flag_byte_value, displacement)
+      else:
+        object_code = "{:02x}{:01x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word] + 1, flag_byte_value, displacement)
+
+    # SIC
+    else:
+      # print('sic')
+      if flag_bits[2] == 1:
+        object_code = "{:02x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word], displacement + 32768)
+      else:
+        object_code = "{:02x}{:03x}".format(MNEUMONIC_HEX[mneumonic_word], displacement )
+  
+    if directive:
+      if directive_word == "BYTE":
+        if "X" in instruction_word:
+          object_code = ""
+          instruction_word = instruction_word[2:-1]
+          for hex_letter in instruction_word:
+            object_code += "{}".format(hex_letter)
+        elif "C" in instruction_word:
+          object_code = ""
+          instruction_word = instruction_word[2:-1]
+          for letter in instruction_word:
+            letter = ord(letter)
+            object_code += "{:02x}".format(letter)
+
+    object_code_list[ADDRESS_LIST[line_num]] = object_code
+    line = inFd.readline()
+
+  text_file_list = format_text_file(object_code_list)  
+  for line in text_file_list:
+    print(line)
+
+  print("E{:06x}".format(STARTING_ADDRESS))
+
+def format_text_file(object_code_list):
+  text_file_list = []
+  text_file_start = True
+  content = ""
+
+  for value in object_code_list:
+    if text_file_start:
+      txt_start = "T{:06x}".format(value)
+      text_file_start = False
+      start_value = value
+
+    temp_content = content
+    content += object_code_list[value]
+
+    if len(content) > 60:
+      text_file_start = True
+      length = value - start_value
+      text_file_list.append("{}{}{}".format(txt_start, length, temp_content))
+      content = object_code_list[value]
+      
+
+  return text_file_list
+      
+
+    
+
+
+
+def parseInstruction(line):
+  line = line.strip()
+  comment = re.match(r"^\.", line)
+  label = re.match(r"([A-Z_][A-Z_0-9]*):", line, re.IGNORECASE)
+
+  if comment:
+    return None, None, None, None, None
+  elif label:
+    label_name = label.group()
+    label_index = label.span()
+    line = line[label_index[1]:].strip()
+
+  directive = re.match(r"("+'|'.join(DIRECTIVES)+"+)", line, re.I)
+  if directive:
+    directive_name = directive.group()
+    directive_index = directive.span()
+    line = line[directive_index[1]:].strip()
+
+  invalid_instruction = None
+  if not directive:
+    mneumonic = re.match(r"\+?("+'|'.join(MNEUMONICS)+"+)", line, re.I)
+    if mneumonic == None:
+      invalid_instruction = re.match(r"\w*", line)
+
+  else:
+    mneumonic = None
+    
+  if mneumonic:
+    mneumonic_name = mneumonic.group()
+    mneumonic_index = mneumonic.span()
+    line = line[mneumonic_index[1]:].strip()
+  
+  instruction = re.match(r"'?.*'?", line, re.I)
+  #"C\s*'(?P<bytes>[ -~]+)'"
+  #"x\s*'(?P<>[0-9A-F]+)"
+  if instruction:
+    instruction_name = instruction.group()
+
+
+  return label, directive, mneumonic, instruction, invalid_instruction
+
+
+if __name__ == "__main__":
+  start()
